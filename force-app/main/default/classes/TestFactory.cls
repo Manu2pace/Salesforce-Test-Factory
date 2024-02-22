@@ -1,14 +1,17 @@
-@isTest
-public class TestFactory {
-
+public with sharing class TestFactory {
+	public static list<String> defaultTestFactoryList = new List<String>{ 'TestFactoryDefaults' };
 	public static SObject createSObject(SObject sObj) {
 		// Check what type of object we are creating and add any defaults that are needed.
 		String objectName = String.valueOf(sObj.getSObjectType());
 		// Construct the default values class. Salesforce doesn't allow '__' in class names
 		String defaultClassName = objectName.replaceAll('__(c|C)$|__', '') + 'Defaults';
 		// If there is a class that exists for the default values, then use them
-		if (Type.forName('TestFactoryDefaults.' + defaultClassName) != null) {
-			sObj = createSObject(sObj, 'TestFactoryDefaults.' + defaultClassName);
+		for (String defaultTestFactory : defaultTestFactoryList) {
+			// If there is a class that exists for the default values, then use them
+			if (Type.forName(defaultTestFactory + '.' + defaultClassName) != null) {
+				sObj = createSObject(sObj, defaultTestFactory + '.' + defaultClassName);
+				break;
+			}
 		}
 		return sObj;
 	}
@@ -25,10 +28,19 @@ public class TestFactory {
 		// Create an instance of the defaults class so we can get the Map of field defaults
 		Type t = Type.forName(defaultClassName);
 		if (t == null) {
-			Throw new TestFactoryException('Invalid defaults class.');
+			throw new TestFactoryException('Invalid defaults class.');
 		}
-		FieldDefaults defaults = (FieldDefaults)t.newInstance();
+		FieldDefaults defaults = (FieldDefaults) t.newInstance();
 		addFieldDefaults(sObj, defaults.getFieldDefaults());
+		return sObj;
+	}
+
+	public static SObject createSObject(SObject sObj, Type classToken) {
+		// Create an instance of the defaults class so we can get the Map of field defaults
+		if (classToken != null) {
+			FieldDefaults defaults = (FieldDefaults) classToken.newInstance();
+			addFieldDefaults(sObj, defaults.getFieldDefaults());
+		}
 		return sObj;
 	}
 
@@ -41,18 +53,23 @@ public class TestFactory {
 	}
 
 	public static SObject[] createSObjectList(Sobject sObj, Integer numberOfObjects) {
-		return createSObjectList(sObj, numberOfObjects, (String)null);
+		return createSObjectList(sObj, numberOfObjects, (String) null);
 	}
 
 	public static SObject[] createSObjectList(SObject sObj, Integer numberOfObjects, Boolean doInsert) {
-		SObject[] retList = createSObjectList(sObj, numberOfObjects, (String)null);
+		SObject[] retList = createSObjectList(sObj, numberOfObjects, (String) null);
 		if (doInsert) {
 			insert retList;
 		}
 		return retList;
 	}
 
-	public static SObject[] createSObjectList(SObject sObj, Integer numberOfObjects, String defaultClassName, Boolean doInsert) {
+	public static SObject[] createSObjectList(
+		SObject sObj,
+		Integer numberOfObjects,
+		String defaultClassName,
+		Boolean doInsert
+	) {
 		SObject[] retList = createSObjectList(sObj, numberOfObjects, defaultClassName);
 		if (doInsert) {
 			insert retList;
@@ -61,8 +78,9 @@ public class TestFactory {
 	}
 
 	public static SObject[] createSObjectList(Sobject sObj, Integer numberOfObjects, String defaultClassName) {
-		SObject[] sObjs = new SObject[] {};
+		SObject[] sObjs = new List<SObject>{};
 		SObject newObj;
+        List<String> guidList =new List<String>();
 
 		// Get one copy of the object
 		if (defaultClassName == null) {
@@ -73,17 +91,33 @@ public class TestFactory {
 
 		// Get the name field for the object
 		String nameField = String.valueOf(nameFieldMap.get(sObj.getSObjectType()));
+		/*if (sObj.getSObjectType() == Schema.TimeSlot.getSObjectType()) {
+			nameField = 'TimeSlotNumber';
+		}*/
 		if (nameField == null) {
 			nameField = 'Name';
 		}
-        Boolean nameIsAutoNumber = sObj.getSobjectType().getDescribe().fields.getMap().get(nameField).getDescribe().isAutoNumber();
+		Boolean nameIsAutoNumber = sObj.getSobjectType()
+			.getDescribe()
+			.fields.getMap()
+			.get(nameField)
+			.getDescribe()
+			.isAutoNumber();
 
 		// Clone the object the number of times requested. Increment the name field so each record is unique
 		for (Integer i = 0; i < numberOfObjects; i++) {
 			SObject clonedSObj = newObj.clone(false, true);
-            if (!nameIsAutoNumber) {
-				clonedSObj.put(nameField, (String)clonedSObj.get(nameField) + ' ' + i);
+            String uniqueGuid = getRandomString();
+            guidList.add(uniqueGuid);
+            if(guidList.contains(uniqueGuid)) {
+                uniqueGuid = getRandomString();
             }
+            system.debug('*** IMA guidList.contains(uniqueGuid) = ' + guidList.contains(uniqueGuid));
+			if (!nameIsAutoNumber) {
+                String guid = i + uniqueGuid;
+				clonedSObj.put(nameField, (String) guid + ' ' + clonedSObj.get(nameField) );
+                system.debug('*** IMA cloned Sobj = ' + clonedSObj);
+			}
 			sObjs.add(clonedSObj);
 		}
 		return sObjs;
@@ -101,15 +135,31 @@ public class TestFactory {
 
 	// When we create a list of SObjects, we need to have a unique field for the insert if there isn't an autonumber field.
 	// Usually we use the Name field, but some objects don't have a name field.
-	private static Map<Schema.SObjectType, Schema.SObjectField> nameFieldMap = new Map<Schema.SObjectType, Schema.SObjectField> {
+	private static Map<Schema.SObjectType, Schema.SObjectField> nameFieldMap = new Map<Schema.SObjectType, Schema.SObjectField>{
 		Contact.sObjectType => Contact.LastName,
-		Case.sObjectType => Case.CaseNumber //this is the autonumber field
+		Case.sObjectType => Case.CaseNumber, //this is the autonumber field
+		EmailMessage.sObjectType => EmailMessage.Subject //this is the autonumber field
 	};
 
-	public class TestFactoryException extends Exception {}
+	public class TestFactoryException extends Exception {
+	}
 
 	// Use the FieldDefaults interface to set up values you want to default in for all objects.
 	public interface FieldDefaults {
 		Map<Schema.SObjectField, Object> getFieldDefaults();
 	}
+
+	//Append random string to name : 
+	public static String getRandomString() {
+       final String chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz$^ùàç!è§("é&@#1234567890°_*£%+/.,><=:;,-';
+       String guid = '';
+       while (guid.length() < 15) {
+       Integer idx = Math.mod(Math.abs(Crypto.getRandomInteger()), chars.length());
+       guid += chars.substring(idx, idx+1);
+       }
+        system.debug('$$$ IMA guid = ' + guid);
+    	return guid;
+		
+	}
+	
 }
